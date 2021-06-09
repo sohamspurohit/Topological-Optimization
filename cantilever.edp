@@ -1,0 +1,127 @@
+real Lx = 4.0;
+real Ly = 1.0;
+real TOL = 1e-4;
+real width = 0.06*Ly;
+real E = 1.0;
+real nu = 0.33;
+real mu = E/(2*(1+nu));
+real lambda = E*nu/((1+nu)*(1-2*nu));
+real h0=0.7;
+real hmin=0.0;
+real hmax=1.0;
+real tx = 0.0;
+real ty = -5;
+real bx = 0.0;
+real by = 0.0;
+real epsvoid=1e-4;
+
+border a(t=0, Lx){x=t; y=0; label=1;}
+border b(t=0, Ly){x=Lx; y=t; label=2;}
+border c(t=0, Lx){x=Lx-t; y=Ly; label=3;}
+border d(t=0, Ly){x=0; y=Ly-t; label=4;}
+
+int nymesh = 50;
+int nxmesh = nymesh*Lx/Ly;
+mesh Th = buildmesh(a(nxmesh) + b(nymesh) + c(nxmesh) + d(nymesh));
+
+fespace Vh2d(Th, P1);
+Vh2d ux;
+Vh2d uy;
+Vh2d vx;
+Vh2d vy;
+Vh2d hr;
+Vh2d vs;
+Vh2d h= h0;
+
+macro tr(u1,u2) (dx(u1)+dy(u2)) //
+
+real thick = 0.01;
+real proj0, proj1, projmid;
+
+func forceLoc= (x>(Lx-thick))&&(x<=Lx+thick)&&(y>(Ly-width)/2)&&(y<=(Ly+width)/2);
+
+real dh;
+real hfrac=int2d(Th)(h0);
+
+real l0=-0.05*h0;
+real l1=0.15*h0;
+real lmid;
+real lerr=1e-3;
+
+real eps = 0.01;
+real dt;
+int maxiter = 200;
+
+real alpha = 0.01;
+problem regularization(hr, vs)
+	= int2d(Th)(
+		alpha^2*(dx(hr)*dx(vs) + dy(hr)*dy(vs)) + hr*vs
+	)
+	- int2d(Th)(
+		h*vs
+	)
+;
+
+for (int iter = 0; iter < maxiter; iter++)
+{
+	//// Solve primal problem
+	solve Cantilever ([ux, uy], [vx, vy])
+		= int2d(Th)(
+			(h*h*h-(1-h*h*h)*epsvoid)*(lambda*tr(ux,uy)*tr(vx,vy)
+			+2*mu*(dx(vx)*dx(ux)+dy(vy)*dy(uy)+(dy(ux)+dx(uy))*(dy(vx)+dx(vy))/2))
+		)
+		-int1d(Th, 1, 2, 3)(
+            forceLoc*(tx*vx+ty*vy)
+			)
+		+ on (4, uy=0, ux=0)
+	;
+
+	func hfact= (1-epsvoid)*(3*h*h); 
+	Vh2d dJ = -hfact*(((lambda+2*mu)*dx(ux)+lambda*dy(uy))*dx(ux)+mu*(dy(ux)+dx(uy))*(dy(ux)+dx(uy))+((lambda+2*mu)*dy(uy)+lambda*dx(ux))*dy(uy));
+	
+	dh = max(h[].max, -h[].min);
+	dt = 0.01;
+	h = h - dt*dJ;
+
+	proj0 = int2d(Th)(max(hmin, min(hmax,(h + l0))));
+	proj1 = int2d(Th)(max(hmin, min(hmax,(h + l1))));
+
+	///// Choose an appropriate starting l0 and l1
+	while (proj0 > hfrac)
+	{
+		l0 -= 0.1;
+		proj0 = int2d(Th)(max(hmin, min(hmax,(h + l0))));
+	}
+
+	while (proj1 < hfrac)
+	{
+		l1 += 0.1;
+		proj1 = int2d(Th)(max(hmin, min(hmax,(h + l1))));
+	}
+
+	////// Bisection algorithm
+	while ((l1 - l0) > lerr)
+	{
+		lmid = 0.5*(l0 + l1);
+		projmid = int2d(Th)(max(hmin, min(hmax,(h + lmid))));
+
+		if (projmid < hfrac)
+		{
+			l0 = lmid;
+			proj0 = projmid;
+		}
+		else
+		{
+			l1 = lmid;
+			proj1 = projmid;
+		}
+	}
+
+	h = max(hmin, min(hmax, h + lmid));
+
+	//// Perform H1 regularization
+	regularization;
+	h = hr;
+	plot(h, fill=1, wait=false, value=false);
+}
+
